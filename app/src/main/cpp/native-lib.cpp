@@ -834,6 +834,127 @@ static void analyze_asset_header(
            "O formato interno ainda precisa ser identificado.\n";
 }
 
+static void analyze_asset_structure(
+    int fd,
+    uint64_t image_size,
+    uint32_t root_extent,
+    uint32_t root_size,
+    std::ostringstream& out
+) {
+    out << "\n========== AMOSTRAGEM DA ESTRUTURA ASSETS.DAT ==========\n";
+
+    uint64_t file_offset = 0;
+    uint32_t file_size = 0;
+    std::string file_path;
+
+    if (!find_file(
+            fd, image_size,
+            root_extent, root_size,
+            "ASSETS.DAT",
+            file_offset, file_size, file_path)) {
+        out << "ASSETS.DAT nao encontrado.\n";
+        return;
+    }
+
+    if (file_size < 4 ||
+        !range_fits(file_offset, file_size, image_size)) {
+        out << "Intervalo invalido; analise cancelada.\n";
+        return;
+    }
+
+    const uint64_t size = file_size;
+    const uint64_t sample_size = std::min<uint64_t>(256, size);
+
+    std::vector<uint64_t> positions = {
+        0,
+        4096,
+        size / 4,
+        size / 2,
+        (size * 3) / 4,
+        size - sample_size
+    };
+
+    std::sort(positions.begin(), positions.end());
+    positions.erase(
+        std::unique(positions.begin(), positions.end()),
+        positions.end()
+    );
+
+    out << "Arquivo: " << file_path << "\n";
+    out << "Tamanho: " << size << " bytes\n";
+    out << "Amostras: " << positions.size()
+        << " (ate 256 bytes cada)\n";
+
+    for (size_t n = 0; n < positions.size(); ++n) {
+        const uint64_t rel = positions[n];
+        const size_t amount = static_cast<size_t>(
+            std::min<uint64_t>(sample_size, size - rel)
+        );
+
+        std::vector<uint8_t> bytes(amount);
+
+        if (!read_at(
+                fd, file_offset + rel,
+                bytes.data(), amount)) {
+            out << "\nErro ao ler amostra " << n << ".\n";
+            continue;
+        }
+
+        size_t printable = 0;
+        for (uint8_t b : bytes) {
+            if (b >= 32 && b <= 126) ++printable;
+        }
+
+        out << "\n--- Amostra " << n
+            << " | offset relativo 0x"
+            << std::hex << rel << std::dec
+            << " (" << rel << " bytes) ---\n";
+
+        out << "Inicio HEX: ";
+        const size_t count = std::min<size_t>(32, bytes.size());
+
+        for (size_t i = 0; i < count; ++i) {
+            if (i) out << ' ';
+            out << std::hex << std::uppercase
+                << std::setw(2) << std::setfill('0')
+                << static_cast<unsigned int>(bytes[i]);
+        }
+
+        out << std::dec << std::nouppercase
+            << std::setfill(' ') << "\n";
+
+        out << "ASCII imprimivel: "
+            << printable << "/" << bytes.size() << "\n";
+
+        out << "Possiveis offsets de 32 bits: ";
+
+        size_t found = 0;
+        for (size_t i = 0;
+             i + 4 <= bytes.size() && found < 8;
+             i += 4) {
+            const uint32_t value = le32(bytes.data() + i);
+
+            if (value >= 16 &&
+                static_cast<uint64_t>(value) < size) {
+                if (found) out << "; ";
+
+                out << "+0x" << std::hex << i
+                    << "=0x" << value
+                    << std::dec << " (" << value << ")";
+
+                ++found;
+            }
+        }
+
+        if (!found) out << "nenhum encontrado";
+        out << "\n";
+    }
+
+    out << "\nAviso: offsets candidatos ainda precisam "
+           "ser validados; isso nao confirma modelos.\n";
+}
+
+
 struct AssetRecord {
     std::string path;
     uint32_t size;
