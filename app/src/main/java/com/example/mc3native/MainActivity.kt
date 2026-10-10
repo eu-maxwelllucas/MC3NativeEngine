@@ -1,100 +1,258 @@
+
 package com.example.mc3native
 
 import android.app.Activity
-import android.content.Intent
-import android.net.Uri
-import android.opengl.GLSurfaceView
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
+import android.content.Intent
+import android.net.Uri
 import android.view.Gravity
-import android.view.View
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
+import android.graphics.Color
+import android.opengl.GLSurfaceView
 import java.io.FileNotFoundException
+import java.io.IOException
+import java.nio.charset.StandardCharsets
+import javax.microedition.khronos.egl.EGLConfig
+import javax.microedition.khronos.opengles.GL10
 
 class MainActivity : Activity() {
+
+    companion object {
+        private const val PICK_ISO = 1001
+        private const val SAVE_LOG = 1002
+    }
+
     private lateinit var status: TextView
-    private lateinit var glView: GLSurfaceView
+    private var pendingReport: String = ""
 
     external fun inspectIso(fd: Int): String
 
-    companion object {
-        init { System.loadLibrary("mc3native") }
-        private const val PICK_ISO = 1001
+    init {
+        System.loadLibrary("native-lib")
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        glView = GLSurfaceView(this).apply {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(24, 24, 24, 24)
+            setBackgroundColor(Color.rgb(18, 18, 24))
+        }
+
+        val title = TextView(this).apply {
+            text = "MC3 Native Engine"
+            textSize = 25f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+        }
+
+        val subtitle = TextView(this).apply {
+            text = "Diagnóstico de imagem PS2"
+            textSize = 16f
+            setTextColor(Color.LTGRAY)
+            gravity = Gravity.CENTER
+        }
+
+        val glView = GLSurfaceView(this).apply {
             setEGLContextClientVersion(2)
-            setRenderer(DiagnosticRenderer())
-            renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
+            setRenderer(object : GLSurfaceView.Renderer {
+                override fun onSurfaceCreated(
+                    gl: GL10?,
+                    config: EGLConfig?
+                ) {
+                    android.opengl.GLES20.glClearColor(
+                        0.07f, 0.07f, 0.10f, 1f
+                    )
+                }
+
+                override fun onSurfaceChanged(
+                    gl: GL10?,
+                    width: Int,
+                    height: Int
+                ) {
+                    android.opengl.GLES20.glViewport(
+                        0, 0, width, height
+                    )
+                }
+
+                override fun onDrawFrame(gl: GL10?) {
+                    android.opengl.GLES20.glClear(
+                        android.opengl.GLES20.GL_COLOR_BUFFER_BIT
+                    )
+                }
+            })
+        }
+
+        val selectButton = Button(this).apply {
+            text = "Selecionar ISO do PS2"
+            setOnClickListener {
+                selectIso()
+            }
         }
 
         status = TextView(this).apply {
-            text = "MC3 Native Engine 0.1\nRenderizador OpenGL ES 2.0: diagnóstico inicial"
-            textSize = 14f
-            setTextColor(0xFFFFFFFF.toInt())
-            setPadding(18, 12, 18, 12)
+            text = "Selecione uma ISO para iniciar o diagnóstico."
+            textSize = 15f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
         }
 
-        val pick = Button(this).apply {
-            text = "Selecionar ISO do PS2"
-            setOnClickListener { chooseIso() }
-        }
+        root.addView(
+            title,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        )
 
-        val panel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.TOP
-            setPadding(12, 12, 12, 12)
-            setBackgroundColor(0xCC101820.toInt())
-            addView(pick)
-            addView(status)
-        }
+        root.addView(
+            subtitle,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = 8
+                bottomMargin = 16
+            }
+        )
 
-        val root = android.widget.FrameLayout(this).apply {
-            addView(glView, android.widget.FrameLayout.LayoutParams(-1, -1))
-            addView(panel, android.widget.FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
-        }
+        root.addView(
+            glView,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
+        )
+
+        root.addView(
+            selectButton,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = 16
+                bottomMargin = 12
+            }
+        )
+
+        root.addView(
+            status,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        )
+
         setContentView(root)
     }
 
-    private fun chooseIso() {
+    private fun selectIso() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "*/*"
         }
+
         startActivityForResult(intent, PICK_ISO)
     }
 
-   
-@Deprecated("Use of startActivityForResult for broad device compatibility")
-override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-    super.onActivityResult(requestCode, resultCode, data)
+    @Deprecated("Compatibilidade com a implementação atual do projeto")
+    override fun onActivityResult(
+        requestCode: Int,
+        resultCode: Int,
+        data: Intent?
+    ) {
+        super.onActivityResult(requestCode, resultCode, data)
 
-    if (requestCode != PICK_ISO || resultCode != RESULT_OK) return
+        if (requestCode == PICK_ISO) {
+            if (resultCode != RESULT_OK) {
+                status.text = "Seleção da ISO cancelada."
+                return
+            }
 
-    val uri: Uri = data?.data ?: return
+            val uri: Uri = data?.data ?: run {
+                status.text = "Nenhum arquivo foi selecionado."
+                return
+            }
 
-    try {
-        val pfd = contentResolver.openFileDescriptor(uri, "r")
-            ?: throw FileNotFoundException(
-                "Não foi possível abrir o arquivo selecionado"
-            )
+            status.text = "Analisando ISO... Aguarde."
 
-        val fd = pfd.detachFd()
+            try {
+                val pfd = contentResolver.openFileDescriptor(uri, "r")
+                    ?: throw FileNotFoundException(
+                        "Não foi possível abrir o arquivo selecionado."
+                    )
 
-        val result = try {
-            inspectIso(fd)
-        } finally {
-            ParcelFileDescriptor.adoptFd(fd).use { }
+                val fd = pfd.detachFd()
+
+                pendingReport = try {
+                    inspectIso(fd)
+                } finally {
+                    ParcelFileDescriptor.adoptFd(fd).use { }
+                }
+
+                val saveIntent = Intent(
+                    Intent.ACTION_CREATE_DOCUMENT
+                ).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "text/plain"
+                    putExtra(
+                        Intent.EXTRA_TITLE,
+                        "diagnostico.txt"
+                    )
+                }
+
+                status.text = "Análise concluída. Escolha onde salvar."
+                startActivityForResult(saveIntent, SAVE_LOG)
+
+            } catch (e: Exception) {
+                status.text =
+                    "Falha na análise: ${e.message ?: e.javaClass.simpleName}"
+            }
+
+            return
         }
 
-        status.text = result
-    } catch (e: Exception) {
-        status.text = "Falha ao ler ISO: ${e.message ?: e.javaClass.simpleName}"
+        if (requestCode == SAVE_LOG) {
+            if (resultCode != RESULT_OK) {
+                status.text = "Salvamento cancelado. O relatório não foi gravado."
+                return
+            }
+
+            val uri: Uri = data?.data ?: run {
+                status.text = "Destino do arquivo não identificado."
+                return
+            }
+
+            try {
+                val output = contentResolver.openOutputStream(uri, "wt")
+                    ?: throw IOException(
+                        "Não foi possível criar o arquivo de relatório."
+                    )
+
+                output.use {
+                    it.write(
+                        pendingReport.toByteArray(
+                            StandardCharsets.UTF_8
+                        )
+                    )
+                    it.flush()
+                }
+
+                status.text =
+                    "Relatório salvo!\nAbra diagnostico.txt para ver os detalhes."
+
+            } catch (e: Exception) {
+                status.text =
+                    "Erro ao salvar: ${e.message ?: e.javaClass.simpleName}"
+            }
+        }
     }
- }
 }
