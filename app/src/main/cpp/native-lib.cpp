@@ -1330,6 +1330,13 @@ Java_com_example_mc3native_MainActivity_inspectIso(
     root.size,
     out
 );
+    analyze_asset_structure(
+        fd,
+        image_size,
+        root.extent,
+        root.size,
+        out
+    );
     
     analyze_asset_header(
         fd,
