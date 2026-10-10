@@ -79,10 +79,22 @@ class MainActivity : Activity() {
                 ?: throw FileNotFoundException("Não foi possível abrir o arquivo selecionado")
             
             val fd = pfd.detachFd()
-            val result = try { inspectIso(fd) } finally { android.system.Os.close( android.os.ParcelFileDescriptor.adoptFd(fd).fileDescriptor ) }
-            status.text = result
-        } catch (e: Exception) {
-            status.text = "Falha ao ler ISO: ${e.message ?: e.javaClass.simpleName}"
-        }
+            val result = 
+try {
+    val pfd = contentResolver.openFileDescriptor(uri, "r")
+        ?: throw FileNotFoundException("Não foi possível abrir o arquivo selecionado")
+
+    val fd = pfd.detachFd()
+    val result = try {
+        inspectIso(fd)
+    } finally {
+        ParcelFileDescriptor.adoptFd(fd).close()
+    }
+
+    status.text = result
+} catch (e: Exception) {
+    status.text = "Falha ao ler ISO: ${e.message ?: e.javaClass.simpleName}"
+}
+
     }
 }
