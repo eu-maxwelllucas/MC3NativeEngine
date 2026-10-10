@@ -2,49 +2,58 @@ package com.example.mc3native
 
 import android.app.Activity
 import android.content.Intent
+import android.graphics.Color
+import android.net.Uri
 import android.os.Bundle
+import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import java.io.IOException
+import java.nio.charset.StandardCharsets
 
 class MainActivity : Activity() {
 
-    private lateinit var statusText: TextView
+    companion object {
+        private const val PICK_ISO = 1001
+        private const val SAVE_LOG = 1002
+    }
+
+    private lateinit var status: TextView
+    private var pendingReport = ""
+    private var nativeLoaded = false
+
+    private external fun inspectIso(fd: Int): String
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
             setPadding(24, 24, 24, 24)
-        }
-
-        val scrollView = ScrollView(this)
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.rgb(24, 24, 32))
         }
 
         val title = TextView(this).apply {
             text = "MC3 Native Engine"
-            textSize = 26f
+            textSize = 25f
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
         }
 
         val description = TextView(this).apply {
-            text = """
-                Diagnóstico experimental do Midnight Club 3: DUB Edition Remix.
-
-                Selecione uma ISO de PS2 para analisar seus arquivos ou execute o teste gráfico OpenGL ES.
-            """.trimIndent()
+            text = "Diagnóstico da ISO do PlayStation 2"
             textSize = 16f
+            gravity = Gravity.CENTER
+            setTextColor(Color.LTGRAY)
         }
 
         val selectButton = Button(this).apply {
             text = "Selecionar ISO do PS2"
-            setOnClickListener {
-                selectIso()
-            }
+            setOnClickListener { selectIso() }
         }
 
         val graphicsButton = Button(this).apply {
@@ -59,69 +68,25 @@ class MainActivity : Activity() {
             }
         }
 
-        statusText = TextView(this).apply {
-            text = "Aguardando seleção de ISO."
-            textSize = 15f
+        status = TextView(this).apply {
+            text = "Aplicativo iniciado.\nSelecione a ISO para analisar."
+            textSize = 16f
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
         }
 
-        content.addView(
-            title,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        )
+        root.addView(title)
+        root.addView(description)
+        root.addView(selectButton)
+        root.addView(graphicsButton)
+        root.addView(status)
 
-        content.addView(
-            description,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = 16
+        setContentView(
+            ScrollView(this).apply {
+                addView(root)
+                isFillViewport = true
             }
         )
-
-        content.addView(
-            selectButton,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = 20
-            }
-        )
-
-        content.addView(
-            graphicsButton,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = 8
-            }
-        )
-
-        content.addView(
-            statusText,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = 20
-            }
-        )
-
-        scrollView.addView(content)
-        root.addView(
-            scrollView,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-        )
-
-        setContentView(root)
     }
 
     private fun selectIso() {
@@ -129,12 +94,10 @@ class MainActivity : Activity() {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "*/*"
         }
-
-        @Suppress("DEPRECATION")
-        startActivityForResult(intent, REQUEST_SELECT_ISO)
+        startActivityForResult(intent, PICK_ISO)
     }
 
-    @Deprecated("Usado para manter compatibilidade com o fluxo existente")
+    @Deprecated("Mantido para compatibilidade")
     override fun onActivityResult(
         requestCode: Int,
         resultCode: Int,
@@ -142,23 +105,76 @@ class MainActivity : Activity() {
     ) {
         super.onActivityResult(requestCode, resultCode, data)
 
-        if (requestCode == REQUEST_SELECT_ISO &&
-            resultCode == RESULT_OK
-        ) {
+        if (requestCode == PICK_ISO) {
+            if (resultCode != RESULT_OK) {
+                status.text = "Seleção cancelada."
+                return
+            }
+
             val uri = data?.data ?: return
+            analyzeIso(uri)
+            return
+        }
 
-            contentResolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION
-            )
+        if (requestCode == SAVE_LOG) {
+            if (resultCode != RESULT_OK) {
+                status.text = "Salvamento cancelado."
+                return
+            }
 
-            statusText.text =
-                "ISO selecionada:\n$uri\n\n" +
-                "A integração com o analisador de ISO precisa ser conectada aqui."
+            val uri = data?.data ?: return
+            saveReport(uri)
         }
     }
 
-    companion object {
-        private const val REQUEST_SELECT_ISO = 1001
+    private fun analyzeIso(uri: Uri) {
+        status.text = "Analisando ISO. Aguarde..."
+
+        try {
+            if (!nativeLoaded) {
+                System.loadLibrary("native-lib")
+                nativeLoaded = true
+            }
+
+            val pfd = contentResolver.openFileDescriptor(uri, "r")
+                ?: throw IOException("Não foi possível abrir a ISO.")
+
+            pendingReport = pfd.use { descriptor ->
+                inspectIso(descriptor.detachFd())
+            }
+
+            val saveIntent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TITLE, "diagnostico.txt")
+            }
+
+            status.text = "Análise concluída. Escolha onde salvar."
+            startActivityForResult(saveIntent, SAVE_LOG)
+
+        } catch (e: Exception) {
+            status.text =
+                "Falha na análise:\n${e.message ?: e.javaClass.simpleName}"
+        } catch (e: UnsatisfiedLinkError) {
+            status.text =
+                "Erro ao carregar a biblioteca nativa:\n${e.message}"
+        }
+    }
+
+    private fun saveReport(uri: Uri) {
+        try {
+            val output = contentResolver.openOutputStream(uri, "wt")
+                ?: throw IOException("Não foi possível criar o arquivo.")
+
+            output.use {
+                it.write(pendingReport.toByteArray(StandardCharsets.UTF_8))
+            }
+
+            status.text = "Relatório salvo com sucesso!"
+
+        } catch (e: Exception) {
+            status.text =
+                "Falha ao salvar:\n${e.message ?: e.javaClass.simpleName}"
+        }
     }
 }
