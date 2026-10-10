@@ -96,4 +96,5 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
     } catch (e: Exception) {
         status.text = "Falha ao ler ISO: ${e.message ?: e.javaClass.simpleName}"
     }
+ }
 }
