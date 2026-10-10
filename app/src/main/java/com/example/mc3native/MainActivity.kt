@@ -69,32 +69,31 @@ class MainActivity : Activity() {
         startActivityForResult(intent, PICK_ISO)
     }
 
-    @Deprecated("Use of startActivityForResult for broad device compatibility")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != PICK_ISO || resultCode != RESULT_OK) return
-        val uri: Uri = data?.data ?: return
-        try {
-            val pfd = contentResolver.openFileDescriptor(uri, "r")
-                ?: throw FileNotFoundException("Não foi possível abrir o arquivo selecionado")
-            
-            val fd = pfd.detachFd()
-            val result = 
-try {
-    val pfd = contentResolver.openFileDescriptor(uri, "r")
-        ?: throw FileNotFoundException("Não foi possível abrir o arquivo selecionado")
+   
+@Deprecated("Use of startActivityForResult for broad device compatibility")
+override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+    super.onActivityResult(requestCode, resultCode, data)
 
-    val fd = pfd.detachFd()
-    val result = try {
-        inspectIso(fd)
-    } finally {
-        ParcelFileDescriptor.adoptFd(fd).close()
-    }
+    if (requestCode != PICK_ISO || resultCode != RESULT_OK) return
 
-    status.text = result
-} catch (e: Exception) {
-    status.text = "Falha ao ler ISO: ${e.message ?: e.javaClass.simpleName}"
-}
+    val uri: Uri = data?.data ?: return
 
+    try {
+        val pfd = contentResolver.openFileDescriptor(uri, "r")
+            ?: throw FileNotFoundException(
+                "Não foi possível abrir o arquivo selecionado"
+            )
+
+        val fd = pfd.detachFd()
+
+        val result = try {
+            inspectIso(fd)
+        } finally {
+            ParcelFileDescriptor.adoptFd(fd).use { }
+        }
+
+        status.text = result
+    } catch (e: Exception) {
+        status.text = "Falha ao ler ISO: ${e.message ?: e.javaClass.simpleName}"
     }
 }
