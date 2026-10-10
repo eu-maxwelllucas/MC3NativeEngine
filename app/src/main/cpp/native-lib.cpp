@@ -1089,6 +1089,13 @@ Java_com_example_mc3native_MainActivity_inspectIso(
 
     // Analisa o cabeçalho ELF e os segmentos do executavel.
     analyze_elf(fd, exe_offset, exe_size, out);
+    scan_iso_assets(
+    fd,
+    image_size,
+    root.extent,
+    root.size,
+    out
+);
 
     out << "\n========== LIMITACOES ==========\n";
     out << "- O executavel foi analisado, nao executado.\n";
