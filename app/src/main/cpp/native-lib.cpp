@@ -1,3 +1,4 @@
+
 #include <jni.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -6,57 +7,105 @@
 #include <vector>
 #include <cstring>
 #include <sstream>
+#include <algorithm>
+#include <cctype>
 
 static bool read_at(int fd, uint64_t offset, void* buffer, size_t length) {
     auto* out = static_cast<uint8_t*>(buffer);
     size_t done = 0;
+
     while (done < length) {
-        const ssize_t n = pread(fd, out + done, length - done,
-                                static_cast<off_t>(offset + done));
+        ssize_t n = pread(
+            fd,
+            out + done,
+            length - done,
+            static_cast<off_t>(offset + done)
+        );
+
         if (n <= 0) return false;
         done += static_cast<size_t>(n);
     }
+
     return true;
+}
+
+static bool contains_text(const std::vector<uint8_t>& data,
+                          const std::string& target) {
+    if (target.empty() || data.size() < target.size()) return false;
+
+    return std::search(
+        data.begin(), data.end(),
+        target.begin(), target.end()
+    ) != data.end();
 }
 
 extern "C"
 JNIEXPORT jstring JNICALL
-Java_com_example_mc3native_MainActivity_inspectIso(JNIEnv* env, jobject, jint fd) {
+Java_com_example_mc3native_MainActivity_inspectIso(
+    JNIEnv* env, jobject, jint fd
+) {
     struct stat st{};
     std::ostringstream out;
+
     if (fstat(fd, &st) != 0 || st.st_size <= 0) {
-        out << "Arquivo inválido ou tamanho não disponível.";
-        return env->NewStringUTF(out.str().c_str());
+        return env->NewStringUTF(
+            "Arquivo inválido ou tamanho não disponível."
+        );
     }
 
-    out << "Arquivo selecionado\nTamanho: " << (st.st_size / (1024.0 * 1024.0))
+    const uint64_t size = static_cast<uint64_t>(st.st_size);
+
+    out << "MC3 Native Engine - Diagnóstico 0.2\n\n";
+    out << "Tamanho: " << (size / (1024.0 * 1024.0))
         << " MiB\n";
 
-    // ISO9660 Primary Volume Descriptor: sector 16, byte offset 16*2048.
+    // Verificação preliminar do descritor ISO9660.
     uint8_t pvd[2048]{};
-    if (st.st_size >= 17 * 2048 && read_at(fd, 16 * 2048, pvd, sizeof(pvd))) {
-        const bool iso9660 = pvd[0] == 1 &&
-            std::memcmp(pvd + 1, "CD001", 5) == 0 && pvd[6] == 1;
-        out << "Descritor ISO9660 no setor 16: "
-            << (iso9660 ? "encontrado" : "não identificado") << "\n";
-    } else {
-        out << "Arquivo pequeno demais para um descritor ISO9660 padrão.\n";
+    bool iso9660 = false;
+
+    if (size >= 17 * 2048 &&
+        read_at(fd, 16 * 2048, pvd, sizeof(pvd))) {
+        iso9660 = pvd[0] == 1 &&
+            std::memcmp(pvd + 1, "CD001", 5) == 0 &&
+            pvd[6] == 1;
     }
 
-    // PS2 disc images can use layouts that do not expose a conventional ISO9660 PVD.
-    uint8_t header[64]{};
-    if (read_at(fd, 0, header, sizeof(header))) {
-        std::string first(reinterpret_cast<char*>(header), sizeof(header));
-        if (first.find("PLAYSTATION") != std::string::npos ||
-            first.find("PlayStation") != std::string::npos) {
-            out << "Texto relacionado a PlayStation encontrado no início do arquivo.\n";
-        } else {
-            out << "Cabeçalho inicial lido; isso não confirma nem descarta uma ISO de PS2.\n";
+    out << "Descritor ISO9660: "
+        << (iso9660 ? "identificado" : "não identificado")
+        << "\n";
+
+    // Procura assinaturas conhecidas em uma amostra inicial.
+    // Isso não é uma varredura completa nem confirma a estrutura do disco.
+    const size_t sample_size = static_cast<size_t>(
+        std::min<uint64_t>(size, 8 * 1024 * 1024)
+    );
+
+    std::vector<uint8_t> sample(sample_size);
+    bool sample_read = sample_size > 0 &&
+        read_at(fd, 0, sample.data(), sample.size());
+
+    if (!sample_read) {
+        out << "Não foi possível ler a amostra inicial.\n";
+    } else {
+        const std::string upper_targets[] = {
+            "SYSTEM.CNF", "SLUS_", "SLES_", "SCUS_", "SCES_"
+        };
+
+        out << "\nBusca preliminar nos primeiros 8 MiB:\n";
+
+        for (const auto& target : upper_targets) {
+            bool found = contains_text(sample, target);
+            out << "- " << target << ": "
+                << (found ? "encontrado" : "não encontrado")
+                << "\n";
         }
     }
 
-    out << "\nDiagnóstico inicial concluído.\n"
-        << "Próximo passo: analisar a estrutura do disco e os formatos dos recursos.\n"
-        << "Este protótipo ainda não executa o jogo.";
+    out << "\nLimitações:\n";
+    out << "- A busca examina apenas uma amostra inicial.\n";
+    out << "- Não encontrar um nome não significa que ele não exista no disco.\n";
+    out << "- Ainda não foi interpretada a estrutura completa da ISO.\n";
+    out << "- Este protótipo não executa o jogo.\n";
+
     return env->NewStringUTF(out.str().c_str());
 }
