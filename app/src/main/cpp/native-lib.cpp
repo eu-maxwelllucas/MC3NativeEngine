@@ -721,6 +721,228 @@ static void analyze_elf(
            "possa ser executado.\n";
 }
 
+struct AssetRecord {
+    std::string path;
+    uint32_t size;
+    uint32_t extent;
+};
+
+static std::string asset_extension(const std::string& name) {
+    const size_t slash = name.find_last_of('/');
+    const size_t dot = name.find_last_of('.');
+
+    if (dot == std::string::npos ||
+        (slash != std::string::npos && dot < slash)) {
+        return "";
+    }
+
+    return upper(name.substr(dot));
+}
+
+static bool is_asset_candidate(const AssetRecord& file) {
+    const std::string ext = asset_extension(file.path);
+    const std::string name = upper(file.path);
+
+    static const std::set<std::string> extensions = {
+        ".BIN", ".DAT", ".PAK", ".VIV", ".ARC", ".IMG",
+        ".GEO", ".MDL", ".MESH", ".MODEL", ".CAR", ".VEH",
+        ".TEX", ".TXD", ".PVR", ".TM2", ".VIF", ".VPK",
+        ".WAD", ".PS2"
+    };
+
+    return extensions.count(ext) > 0 ||
+           name.find("CAR") != std::string::npos ||
+           name.find("VEH") != std::string::npos ||
+           name.find("MODEL") != std::string::npos ||
+           name.find("MESH") != std::string::npos ||
+           name.find("ECLIPSE") != std::string::npos;
+}
+
+static void scan_iso_assets(
+    int fd,
+    uint64_t image_size,
+    uint32_t root_extent,
+    uint32_t root_size,
+    std::ostringstream& out
+) {
+    constexpr size_t MAX_FILES = 30000;
+    constexpr size_t MAX_LIST = 150;
+
+    std::queue<DirTask> pending;
+    std::set<std::pair<uint32_t, uint32_t>> visited;
+    std::vector<AssetRecord> files;
+
+    pending.push({root_extent, root_size, "", 0});
+
+    size_t directories_read = 0;
+    bool truncated = false;
+
+    while (!pending.empty() &&
+           visited.size() < MAX_DIRS &&
+           files.size() < MAX_FILES) {
+
+        DirTask dir = pending.front();
+        pending.pop();
+
+        if (dir.depth > 32) continue;
+
+        if (!visited.insert(
+                {dir.extent, dir.size}).second) {
+            continue;
+        }
+
+        const uint64_t offset =
+            static_cast<uint64_t>(dir.extent) * SECTOR;
+
+        if (offset >= image_size || dir.size == 0) continue;
+
+        uint64_t safe_size =
+            std::min<uint64_t>(dir.size, MAX_DIR_SIZE);
+
+        safe_size = std::min<uint64_t>(
+            safe_size, image_size - offset);
+
+        if (safe_size == 0) continue;
+
+        std::vector<uint8_t> data(
+            static_cast<size_t>(safe_size));
+
+        if (!read_at(fd, offset, data.data(), data.size())) {
+            continue;
+        }
+
+        ++directories_read;
+
+        size_t pos = 0;
+
+        while (pos < data.size()) {
+            const uint8_t record_len = data[pos];
+
+            if (record_len == 0) {
+                pos = ((pos / SECTOR) + 1) * SECTOR;
+                continue;
+            }
+
+            if (record_len > data.size() - pos) break;
+
+            IsoEntry entry{};
+
+            const bool valid = parse_record(
+                data.data() + pos,
+                data.size() - pos,
+                entry);
+
+            pos += record_len;
+
+            if (!valid || entry.name.empty()) continue;
+
+            const std::string name = clean_name(entry.name);
+
+            const std::string path = dir.path.empty()
+                ? name
+                : dir.path + "/" + name;
+
+            const uint64_t file_offset =
+                static_cast<uint64_t>(entry.extent) * SECTOR;
+
+            if (file_offset >= image_size) continue;
+
+            if (entry.directory) {
+                if (entry.size > 0 &&
+                    entry.size <= MAX_DIR_SIZE &&
+                    range_fits(
+                        file_offset, entry.size, image_size)) {
+                    pending.push({
+                        entry.extent,
+                        entry.size,
+                        path,
+                        dir.depth + 1
+                    });
+                }
+            } else {
+                files.push_back({
+                    path, entry.size, entry.extent
+                });
+
+                if (files.size() >= MAX_FILES) {
+                    truncated = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (!pending.empty() || visited.size() >= MAX_DIRS) {
+        truncated = true;
+    }
+
+    std::vector<AssetRecord> candidates;
+
+    for (const auto& file : files) {
+        if (is_asset_candidate(file)) {
+            candidates.push_back(file);
+        }
+    }
+
+    auto largest_first =
+        [](const AssetRecord& a, const AssetRecord& b) {
+            return a.size > b.size;
+        };
+
+    std::sort(
+        candidates.begin(), candidates.end(), largest_first);
+
+    std::sort(
+        files.begin(), files.end(), largest_first);
+
+    out << "\n========== SCANNER DE ASSETS ==========\n";
+    out << "Diretorios lidos: " << directories_read << "\n";
+    out << "Arquivos encontrados: " << files.size() << "\n";
+    out << "Candidatos a assets: " << candidates.size() << "\n";
+
+    if (truncated) {
+        out << "AVISO: limite de seguranca atingido; "
+               "a varredura pode estar incompleta.\n";
+    }
+
+    out << "\n--- Candidatos a modelos/texturas/pacotes ---\n";
+
+    const size_t count =
+        std::min(candidates.size(), MAX_LIST);
+
+    for (size_t i = 0; i < count; ++i) {
+        const auto& f = candidates[i];
+
+        out << "[" << i + 1 << "] "
+            << f.path
+            << " | " << f.size << " bytes"
+            << " | setor " << f.extent << "\n";
+    }
+
+    if (candidates.empty()) {
+        out << "Nenhum candidato identificado por nome "
+               "ou extensao.\n";
+    }
+
+    out << "\n--- Maiores arquivos encontrados ---\n";
+
+    const size_t largest =
+        std::min(files.size(), static_cast<size_t>(30));
+
+    for (size_t i = 0; i < largest; ++i) {
+        const auto& f = files[i];
+
+        out << "[" << i + 1 << "] "
+            << f.path
+            << " | " << f.size << " bytes"
+            << " | setor " << f.extent << "\n";
+    }
+
+    out << "\nO scanner lista candidatos; nao decodifica "
+           "formatos proprietarios nem confirma o modelo "
+           "do Eclipse.\n";
+}
+
 // ------------------------------------------------------------
 // Funcao chamada pelo Kotlin via JNI
 // ------------------------------------------------------------
