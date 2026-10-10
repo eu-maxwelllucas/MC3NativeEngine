@@ -140,7 +140,7 @@ class MainActivity : Activity() {
                 ?: throw IOException("Não foi possível abrir a ISO.")
 
             pendingReport = pfd.use { descriptor ->
-                inspectIso(descriptor.detachFd())
+                inspectIso(descriptor.fd)
             }
 
             val saveIntent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
