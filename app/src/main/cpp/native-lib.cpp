@@ -1209,7 +1209,15 @@ Java_com_example_mc3native_MainActivity_inspectIso(
     root.size,
     out
 );
-
+    
+    analyze_asset_header(
+        fd,
+        image_size,
+        root.extent,
+        root.size,
+        out
+    );
+  
     out << "\n========== LIMITACOES ==========\n";
     out << "- O executavel foi analisado, nao executado.\n";
     out << "- Ainda nao existe um motor que execute o jogo PS2.\n";
