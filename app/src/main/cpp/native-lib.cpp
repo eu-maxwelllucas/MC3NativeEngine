@@ -721,6 +721,119 @@ static void analyze_elf(
            "possa ser executado.\n";
 }
 
+static void analyze_asset_header(
+    int fd,
+    uint64_t image_size,
+    uint32_t root_extent,
+    uint32_t root_size,
+    std::ostringstream& out
+) {
+    out << "\n========== ANALISE ASSETS.DAT ==========\n";
+
+    uint64_t file_offset = 0;
+    uint32_t file_size = 0;
+    std::string file_path;
+
+    if (!find_file(
+            fd, image_size,
+            root_extent, root_size,
+            "ASSETS.DAT",
+            file_offset, file_size, file_path)) {
+        out << "ASSETS.DAT nao encontrado ou intervalo invalido.\n";
+        return;
+    }
+
+    out << "Arquivo: " << file_path << "\n";
+    out << "Tamanho: " << file_size << " bytes\n";
+    out << "Offset na ISO: " << file_offset << " bytes\n";
+
+    if (file_size == 0 ||
+        !range_fits(file_offset, file_size, image_size)) {
+        out << "Erro: arquivo fora dos limites da ISO.\n";
+        return;
+    }
+
+    // Le somente os primeiros 128 bytes.
+    constexpr size_t HEADER_BYTES = 128;
+    const size_t count = std::min<size_t>(
+        file_size, HEADER_BYTES);
+
+    std::vector<uint8_t> header(count);
+
+    if (!read_at(fd, file_offset, header.data(), count)) {
+        out << "Falha ao ler o cabecalho.\n";
+        return;
+    }
+
+    out << "Bytes lidos: " << count << "\n";
+
+    out << "\n--- Inicio em ASCII ---\n";
+    for (size_t i = 0; i < std::min<size_t>(16, count); ++i) {
+        unsigned char c = header[i];
+        out << ((c >= 32 && c <= 126)
+                    ? static_cast<char>(c) : '.');
+    }
+    out << "\n";
+
+    out << "\n--- Assinatura em hexadecimal ---\n";
+    for (size_t i = 0; i < std::min<size_t>(16, count); ++i) {
+        if (i) out << ' ';
+        out << std::hex << std::uppercase
+            << std::setw(2) << std::setfill('0')
+            << static_cast<unsigned>(header[i]);
+    }
+    out << std::dec << std::nouppercase
+        << std::setfill(' ') << "\n";
+
+    out << "\n--- Dump hexadecimal (128 bytes iniciais) ---\n";
+
+    for (size_t row = 0; row < count; row += 16) {
+        out << std::hex << std::uppercase
+            << std::setw(4) << std::setfill('0')
+            << row << "  ";
+
+        const size_t end = std::min(row + 16, count);
+
+        for (size_t i = row; i < end; ++i) {
+            out << std::setw(2)
+                << static_cast<unsigned>(header[i]) << ' ';
+        }
+
+        out << " |";
+
+        for (size_t i = row; i < end; ++i) {
+            unsigned char c = header[i];
+            out << ((c >= 32 && c <= 126)
+                        ? static_cast<char>(c) : '.');
+        }
+
+        out << "|\n";
+    }
+
+    out << std::dec << std::nouppercase
+        << std::setfill(' ');
+
+    out << "\n--- Palavras de 32 bits little-endian ---\n";
+
+    for (size_t i = 0; i + 4 <= count && i < 32; i += 4) {
+        uint32_t value =
+            static_cast<uint32_t>(header[i]) |
+            (static_cast<uint32_t>(header[i + 1]) << 8) |
+            (static_cast<uint32_t>(header[i + 2]) << 16) |
+            (static_cast<uint32_t>(header[i + 3]) << 24);
+
+        out << "Offset +" << i << ": 0x"
+            << std::hex << std::uppercase
+            << std::setw(8) << std::setfill('0')
+            << value << std::dec
+            << std::nouppercase << std::setfill(' ')
+            << " (" << value << ")\n";
+    }
+
+    out << "\nInspecao inicial concluida. "
+           "O formato interno ainda precisa ser identificado.\n";
+}
+
 struct AssetRecord {
     std::string path;
     uint32_t size;
